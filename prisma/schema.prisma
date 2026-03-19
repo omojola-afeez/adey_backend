@@ -1,0 +1,382 @@
+// ADEY Database Schema
+// Run: npx prisma db push
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────
+//  USERS
+// ─────────────────────────────────────
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  phone         String    @unique
+  firstName     String
+  lastName      String
+  passwordHash  String
+  role          Role      @default(CUSTOMER)
+  tier          Tier      @default(BRONZE)
+  loyaltyPoints Int       @default(0)
+  isVerified    Boolean   @default(false)
+  isActive      Boolean   @default(true)
+  avatarUrl     String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  orders        Order[]
+  addresses     Address[]
+  wishlistItems WishlistItem[]
+  refreshTokens RefreshToken[]
+  notifications Notification[]
+
+  @@map("users")
+}
+
+enum Role {
+  CUSTOMER
+  STAFF
+  ADMIN
+  SUPERADMIN
+}
+
+enum Tier {
+  BRONZE
+  SILVER
+  GOLD
+  PLATINUM
+}
+
+// ─────────────────────────────────────
+//  ADDRESSES
+// ─────────────────────────────────────
+model Address {
+  id         String  @id @default(cuid())
+  userId     String
+  label      String  @default("Home")
+  street     String
+  city       String
+  state      String
+  landmark   String?
+  isDefault  Boolean @default(false)
+
+  user       User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  orders     Order[]
+
+  @@map("addresses")
+}
+
+// ─────────────────────────────────────
+//  CATEGORIES
+// ─────────────────────────────────────
+model Category {
+  id          String    @id @default(cuid())
+  name        String    @unique
+  slug        String    @unique
+  icon        String?
+  description String?
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+
+  products    Product[]
+
+  @@map("categories")
+}
+
+// ─────────────────────────────────────
+//  PRODUCTS
+// ─────────────────────────────────────
+model Product {
+  id             String        @id @default(cuid())
+  sku            String        @unique
+  name           String
+  slug           String        @unique
+  description    String?       @db.Text
+  categoryId     String
+  costPrice      Float         // Price paid in China (CNY converted)
+  sellingPrice   Float         // NGN selling price
+  comparePrice   Float?        // Original/crossed-out price
+  stockQty       Int           @default(0)
+  reservedQty    Int           @default(0) // Held for pending orders
+  lowStockThreshold Int        @default(5)
+  availability   Availability  @default(IN_STOCK)
+  images         String[]      // Cloudinary URLs
+  tags           String[]
+  weight         Float?        // kg, for shipping calc
+  isActive       Boolean       @default(true)
+  isFeatured     Boolean       @default(false)
+  rating         Float         @default(0)
+  reviewCount    Int           @default(0)
+  soldCount      Int           @default(0)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  category       Category      @relation(fields: [categoryId], references: [id])
+  variants       ProductVariant[]
+  orderItems     OrderItem[]
+  wishlistItems  WishlistItem[]
+  shipmentItems  ShipmentItem[]
+  reviews        Review[]
+
+  @@map("products")
+}
+
+enum Availability {
+  IN_STOCK
+  LOW_STOCK
+  OUT_OF_STOCK
+  IN_TRANSIT
+  PRE_ORDER
+  DISCONTINUED
+}
+
+model ProductVariant {
+  id          String  @id @default(cuid())
+  productId   String
+  name        String  // e.g. "Colour", "Storage"
+  value       String  // e.g. "Black", "128GB"
+  priceAdj    Float   @default(0) // price adjustment from base
+  stockQty    Int     @default(0)
+  sku         String?
+
+  product     Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@map("product_variants")
+}
+
+// ─────────────────────────────────────
+//  ORDERS
+// ─────────────────────────────────────
+model Order {
+  id              String       @id @default(cuid())
+  reference       String       @unique // e.g. ADE-20250317-9841
+  userId          String
+  addressId       String?
+  status          OrderStatus  @default(PENDING)
+  deliveryMethod  DeliveryType @default(STANDARD)
+  subtotal        Float
+  deliveryFee     Float        @default(0)
+  discount        Float        @default(0)
+  total           Float
+  depositPaid     Float        @default(0) // for pre-orders
+  balanceDue      Float        @default(0)
+  couponCode      String?
+  notes           String?
+  paymentRef      String?      // Paystack reference
+  paymentStatus   PaymentStatus @default(UNPAID)
+  paidAt          DateTime?
+  dispatchedAt    DateTime?
+  deliveredAt     DateTime?
+  cancelledAt     DateTime?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  user            User         @relation(fields: [userId], references: [id])
+  address         Address?     @relation(fields: [addressId], references: [id])
+  items           OrderItem[]
+  payments        Payment[]
+
+  @@map("orders")
+}
+
+enum OrderStatus {
+  PENDING
+  CONFIRMED
+  PROCESSING
+  IN_TRANSIT
+  CUSTOMS_CLEARANCE
+  OUT_FOR_DELIVERY
+  DELIVERED
+  CANCELLED
+  REFUNDED
+  PRE_ORDER
+}
+
+enum DeliveryType {
+  STANDARD
+  EXPRESS
+  PICKUP
+  NATIONWIDE
+}
+
+enum PaymentStatus {
+  UNPAID
+  DEPOSIT_PAID
+  PARTIALLY_PAID
+  PAID
+  REFUNDED
+}
+
+model OrderItem {
+  id          String   @id @default(cuid())
+  orderId     String
+  productId   String
+  variantInfo Json?    // snapshot of variant at time of order
+  quantity    Int
+  unitPrice   Float
+  totalPrice  Float
+  isPreOrder  Boolean  @default(false)
+
+  order       Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product     Product  @relation(fields: [productId], references: [id])
+
+  @@map("order_items")
+}
+
+// ─────────────────────────────────────
+//  PAYMENTS
+// ─────────────────────────────────────
+model Payment {
+  id            String        @id @default(cuid())
+  orderId       String
+  paystackRef   String        @unique
+  amount        Float
+  currency      String        @default("NGN")
+  channel       String?       // card, bank_transfer, ussd
+  status        String        @default("pending") // pending, success, failed
+  metadata      Json?
+  paidAt        DateTime?
+  createdAt     DateTime      @default(now())
+
+  order         Order         @relation(fields: [orderId], references: [id])
+
+  @@map("payments")
+}
+
+// ─────────────────────────────────────
+//  SHIPMENTS  (China → Lagos batches)
+// ─────────────────────────────────────
+model Shipment {
+  id            String         @id @default(cuid())
+  reference     String         @unique // e.g. SHP-20250308-001
+  status        ShipmentStatus @default(ORDERED)
+  origin        String         @default("Guangzhou, China")
+  vessel        String?        // Ship name
+  departedAt    DateTime?
+  etaLagos      DateTime?
+  arrivedAt     DateTime?
+  clearedAt     DateTime?
+  notes         String?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  items         ShipmentItem[]
+
+  @@map("shipments")
+}
+
+enum ShipmentStatus {
+  ORDERED
+  PACKED
+  DEPARTED
+  IN_TRANSIT
+  ARRIVED_PORT
+  CUSTOMS_CLEARANCE
+  CLEARED
+  DISTRIBUTED
+}
+
+model ShipmentItem {
+  id          String   @id @default(cuid())
+  shipmentId  String
+  productId   String
+  quantity    Int
+  costPrice   Float    // CNY equivalent in NGN
+
+  shipment    Shipment @relation(fields: [shipmentId], references: [id])
+  product     Product  @relation(fields: [productId], references: [id])
+
+  @@map("shipment_items")
+}
+
+// ─────────────────────────────────────
+//  WISHLIST
+// ─────────────────────────────────────
+model WishlistItem {
+  id        String   @id @default(cuid())
+  userId    String
+  productId String
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, productId])
+  @@map("wishlist_items")
+}
+
+// ─────────────────────────────────────
+//  REVIEWS
+// ─────────────────────────────────────
+model Review {
+  id          String   @id @default(cuid())
+  productId   String
+  authorName  String
+  authorEmail String
+  rating      Int      // 1-5
+  title       String?
+  body        String   @db.Text
+  isVerified  Boolean  @default(false)
+  isApproved  Boolean  @default(false)
+  helpfulCount Int     @default(0)
+  createdAt   DateTime @default(now())
+
+  product     Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@map("reviews")
+}
+
+// ─────────────────────────────────────
+//  COUPONS
+// ─────────────────────────────────────
+model Coupon {
+  id            String    @id @default(cuid())
+  code          String    @unique
+  type          String    // percent | fixed
+  value         Float     // % or NGN amount
+  minOrderValue Float     @default(0)
+  maxUses       Int?
+  usedCount     Int       @default(0)
+  expiresAt     DateTime?
+  isActive      Boolean   @default(true)
+  createdAt     DateTime  @default(now())
+
+  @@map("coupons")
+}
+
+// ─────────────────────────────────────
+//  NOTIFICATIONS
+// ─────────────────────────────────────
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  type      String   // order_update | shipment | promo | system
+  title     String
+  body      String
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("notifications")
+}
+
+// ─────────────────────────────────────
+//  AUTH: REFRESH TOKENS
+// ─────────────────────────────────────
+model RefreshToken {
+  id        String   @id @default(cuid())
+  userId    String
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("refresh_tokens")
+}
